@@ -50,7 +50,7 @@ async def ask_groq(user_message: str) -> str:
         {"role": "user", "content": user_message}
     ]
     data = {
-        "model": "llama3-8b-8192",
+        "model": "mixtral-8x7b-32768",
         "messages": messages,
         "temperature": 0.7,
         "max_tokens": 1000
