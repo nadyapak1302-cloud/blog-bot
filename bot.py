@@ -8,12 +8,10 @@ from aiogram.fsm.state import State, StatesGroup
 import aiohttp
 import os
 
-# ==================== НАСТРОЙКИ ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# ==================== ПРОМПТ ====================
 SYSTEM_PROMPT = """Ты — Блог-Наставник.
 
 Отвечай ясно, структурированно и без лишней воды.
@@ -32,9 +30,11 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+class AskNadia(StatesGroup):
+    waiting_for_question = State()
+
 class UserData(StatesGroup):
     waiting_niche = State()
-    audit_step = State()
 
 def main_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -50,13 +50,12 @@ async def ask_groq(user_message: str) -> str:
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_message}
-    ]
     data = {
         "model": "openai/gpt-oss-20b",
-        "messages": messages,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message}
+        ],
         "temperature": 0.7,
         "max_tokens": 1000
     }
@@ -73,7 +72,7 @@ async def ask_groq(user_message: str) -> str:
 async def cmd_start(message: types.Message):
     await message.answer(
         "Привет! Я — твой Блог-Наставник.\n\n"
-        "Могу помочь с идеями для Reels, контент-планом и ответить на вопросы по блогу.",
+        "Выбери, что хочешь сделать:",
         reply_markup=main_keyboard()
     )
 
@@ -86,49 +85,33 @@ async def ask_nadia_start(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(AskNadia.waiting_for_question)
 async def process_nadia_question(message: types.Message, state: FSMContext):
     user = message.from_user
-    await bot.send_message(
-        ADMIN_ID,
-        f"Новый вопрос от {user.full_name} (@{user.username}):\n\n{message.text}"
-    )
-    await message.answer("Вопрос отправлен Наде.", reply_markup=main_keyboard())
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            f"Новый вопрос от {user.full_name} (@{user.username}):\n\n{message.text}"
+        )
+        await message.answer("Вопрос отправлен Наде.", reply_markup=main_keyboard())
+    except:
+        await message.answer("Не удалось отправить вопрос. Попробуй позже.", reply_markup=main_keyboard())
     await state.clear()
 
-@dp.callback_query(F.data == "reels_idea")
-async def reels_idea(callback: types.CallbackQuery):
-    answer = await ask_groq("Дай одну сильную идею для Reels: тема, хук, структура и визуал.")
-    await callback.message.answer(answer, reply_markup=main_keyboard())
-    await callback.answer()
-
-@dp.callback_query(F.data == "content_plan")
-async def content_plan(callback: types.CallbackQuery):
-    answer = await ask_groq("Составь контент-план на 7 дней в виде таблицы с акцентом на Reels.")
-    await callback.message.answer(answer, reply_markup=main_keyboard())
-    await callback.answer()
-
-@dp.message(F.text)
-async def handle_message(message: types.Message):
-    answer = await ask_groq(message.text)
-    await message.answer(answer, reply_markup=main_keyboard())
 @dp.callback_query(F.data == "audit")
 async def start_audit(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer(
-        "Давай сделаем короткий аудит.\n\n"
-        "Напиши свою нишу (например: психология, фитнес, финансы, бьюти и т.д.)"
-    )
+    await callback.message.answer("Напиши свою нишу для аудита:")
     await state.set_state(UserData.waiting_niche)
     await state.update_data(mode="audit")
     await callback.answer()
 
 @dp.callback_query(F.data == "reels_idea")
 async def reels_idea(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("Напиши свою нишу, и я дам идею для Reels именно под неё.")
+    await callback.message.answer("Напиши свою нишу, и я дам идею для Reels:")
     await state.set_state(UserData.waiting_niche)
     await state.update_data(mode="reels")
     await callback.answer()
 
 @dp.callback_query(F.data == "content_plan")
 async def content_plan(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("Напиши свою нишу, и я составлю контент-план.")
+    await callback.message.answer("Напиши свою нишу для контент-плана:")
     await state.set_state(UserData.waiting_niche)
     await state.update_data(mode="plan")
     await callback.answer()
@@ -140,17 +123,21 @@ async def process_niche(message: types.Message, state: FSMContext):
     mode = data.get("mode")
 
     if mode == "reels":
-        prompt = f"Ниша клиента: {niche}. Дай одну чёткую идею для Reels. Формат:\nТема:\nХук:\nСтруктура:\nЧто снимать:"
-        answer = await ask_groq(prompt)
+        prompt = f"Ниша: {niche}\n\nДай идею для Reels в формате:\nТема:\nХук:\nСтруктура:\nЧто снимать:"
     elif mode == "plan":
-        prompt = f"Ниша клиента: {niche}. Составь контент-план на 7 дней. Пиши структурированно, по дням, без сложных таблиц. Акцент на Reels."
-        answer = await ask_groq(prompt)
-    else:  # audit
-        prompt = f"Ниша клиента: {niche}. Сделай короткий аудит блога. Напиши сильные стороны, что улучшить и 3 главных рекомендации."
-        answer = await ask_groq(prompt)
+        prompt = f"Ниша: {niche}\n\nСоставь контент-план на 7 дней. Пиши по дням, коротко и понятно. Акцент на Reels."
+    else:
+        prompt = f"Ниша: {niche}\n\nСделай короткий аудит. Напиши сильные стороны, что улучшить и 3 рекомендации."
 
+    answer = await ask_groq(prompt)
     await message.answer(answer, reply_markup=main_keyboard())
     await state.clear()
+
+@dp.message(F.text)
+async def handle_message(message: types.Message):
+    answer = await ask_groq(message.text)
+    await message.answer(answer, reply_markup=main_keyboard())
+
 async def main():
     await dp.start_polling(bot)
 
