@@ -34,14 +34,16 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-class AskNadia(StatesGroup):
-    waiting_for_question = State()
+class UserData(StatesGroup):
+    waiting_niche = State()
+    audit_step = State()
 
 def main_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Спросить у Нади", callback_data="ask_nadia")],
+        [InlineKeyboardButton(text="Аудит профиля", callback_data="audit")],
         [InlineKeyboardButton(text="Идея для Reels", callback_data="reels_idea")],
-        [InlineKeyboardButton(text="Контент-план на неделю", callback_data="content_plan")]
+        [InlineKeyboardButton(text="Контент-план на неделю", callback_data="content_plan")],
+        [InlineKeyboardButton(text="Спросить у Нади", callback_data="ask_nadia")]
     ])
 
 async def ask_groq(user_message: str) -> str:
@@ -109,7 +111,48 @@ async def content_plan(callback: types.CallbackQuery):
 async def handle_message(message: types.Message):
     answer = await ask_groq(message.text)
     await message.answer(answer, reply_markup=main_keyboard())
+@dp.callback_query(F.data == "audit")
+async def start_audit(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer(
+        "Давай сделаем короткий аудит.\n\n"
+        "Напиши свою нишу (например: психология, фитнес, финансы, бьюти и т.д.)"
+    )
+    await state.set_state(UserData.waiting_niche)
+    await state.update_data(mode="audit")
+    await callback.answer()
 
+@dp.callback_query(F.data == "reels_idea")
+async def reels_idea(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("Напиши свою нишу, и я дам идею для Reels именно под неё.")
+    await state.set_state(UserData.waiting_niche)
+    await state.update_data(mode="reels")
+    await callback.answer()
+
+@dp.callback_query(F.data == "content_plan")
+async def content_plan(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("Напиши свою нишу, и я составлю контент-план.")
+    await state.set_state(UserData.waiting_niche)
+    await state.update_data(mode="plan")
+    await callback.answer()
+
+@dp.message(UserData.waiting_niche)
+async def process_niche(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    niche = message.text
+    mode = data.get("mode")
+
+    if mode == "reels":
+        prompt = f"Ниша клиента: {niche}. Дай одну чёткую идею для Reels. Формат:\nТема:\nХук:\nСтруктура:\nЧто снимать:"
+        answer = await ask_groq(prompt)
+    elif mode == "plan":
+        prompt = f"Ниша клиента: {niche}. Составь контент-план на 7 дней. Пиши структурированно, по дням, без сложных таблиц. Акцент на Reels."
+        answer = await ask_groq(prompt)
+    else:  # audit
+        prompt = f"Ниша клиента: {niche}. Сделай короткий аудит блога. Напиши сильные стороны, что улучшить и 3 главных рекомендации."
+        answer = await ask_groq(prompt)
+
+    await message.answer(answer, reply_markup=main_keyboard())
+    await state.clear()
 async def main():
     await dp.start_polling(bot)
 
