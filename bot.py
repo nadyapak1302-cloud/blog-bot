@@ -32,7 +32,7 @@ SYSTEM_PROMPT = """Ты — Блог-Наставник.
 🚀 **Что улучшить**
 ✅ **Рекомендации**
 
-Будь конкретным и полезным. Если уместно — предлагай ежедневные идеи.
+Будь конкретным и полезным.
 """
 
 logging.basicConfig(level=logging.INFO)
@@ -48,6 +48,9 @@ class Audit(StatesGroup):
     platforms = State()
     link = State()
     problem = State()
+
+class Content(StatesGroup):
+    waiting_niche = State()
 
 def main_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -98,7 +101,7 @@ async def cmd_start(message: types.Message):
         parse_mode="Markdown"
     )
 
-# Спросить у Нади
+# ===== Спросить у Нади =====
 @dp.callback_query(F.data == "ask_nadia")
 async def ask_nadia(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("Напиши свой вопрос — я передам его Наде 👩‍💻")
@@ -118,14 +121,16 @@ async def process_question(message: types.Message, state: FSMContext):
         await message.answer("Не удалось отправить. Попробуй позже.", reply_markup=main_keyboard())
     await state.clear()
 
-# Ежедневные идеи
+# ===== Ежедневные идеи =====
 @dp.callback_query(F.data == "daily_ideas")
 async def daily_ideas(callback: types.CallbackQuery):
     await callback.message.answer(
         "✨ **Ежедневные идеи**\n\n"
-        "Напиши свою нишу, и я буду готовить для тебя свежие идеи для Reels.\n\n"
-        "Пока ты можешь в любой момент нажимать «🎬 Идея для Reels» и получать новую.",
-        parse_mode="Markdown"
+        "Напиши свою нишу в любой момент через кнопку «🎬 Идея для Reels», "
+        "и я дам свежую идею именно под тебя.\n\n"
+        "Автоматическая рассылка каждый день — в разработке 😊",
+        parse_mode="Markdown",
+        reply_markup=main_keyboard()
     )
     await callback.answer()
 
@@ -214,32 +219,37 @@ async def audit_final(message: types.Message, state: FSMContext):
     await message.answer(answer, reply_markup=main_keyboard(), parse_mode="Markdown")
     await state.clear()
 
-# Идеи и план
-@dp.callback_query(F.data.in_({"reels_idea", "content_plan"}))
-async def ask_for_niche(callback: types.CallbackQuery, state: FSMContext):
-    mode = "reels" if callback.data == "reels_idea" else "plan"
-    await state.update_data(mode=mode)
-    text = "🎬 Напиши нишу для идеи Reels:" if mode == "reels" else "📅 Напиши нишу для контент-плана:"
-    await callback.message.answer(text)
-    await state.set_state(Audit.niche)
+# ===== ИДЕИ И КОНТЕНТ-ПЛАН (отдельное состояние) =====
+@dp.callback_query(F.data == "reels_idea")
+async def reels_idea(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("🎬 Напиши свою нишу, и я дам идею для Reels:")
+    await state.set_state(Content.waiting_niche)
+    await state.update_data(mode="reels")
     await callback.answer()
 
-@dp.message(Audit.niche)
+@dp.callback_query(F.data == "content_plan")
+async def content_plan(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("📅 Напиши свою нишу для контент-плана:")
+    await state.set_state(Content.waiting_niche)
+    await state.update_data(mode="plan")
+    await callback.answer()
+
+@dp.message(Content.waiting_niche)
 async def process_content_niche(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    if "mode" not in data:
-        return
-
     niche = message.text
-    if data["mode"] == "reels":
-        prompt = f"Ниша: {niche}\n\nДай красивую идею для Reels с эмодзи в формате:\n🎯 **Тема:**\n🔥 **Хук:**\n📋 **Структура:**\n🎥 **Что снимать:**\n💡 **Совет:**"
+    mode = data.get("mode")
+
+    if mode == "reels":
+        prompt = f"Ниша: {niche}\n\nДай красивую идею для Reels:\n🎯 **Тема:**\n🔥 **Хук:**\n📋 **Структура:**\n🎥 **Что снимать:**\n💡 **Совет:**"
     else:
-        prompt = f"Ниша: {niche}\n\nСоставь красивый контент-план на 7 дней. Пиши по дням с эмодзи и **жирным**."
+        prompt = f"Ниша: {niche}\n\nСоставь контент-план на 7 дней. Пиши по дням с эмодзи и **жирным текстом**."
 
     answer = await ask_groq(prompt)
     await message.answer(answer, reply_markup=main_keyboard(), parse_mode="Markdown")
     await state.clear()
 
+# Обычные сообщения
 @dp.message(F.text)
 async def handle_text(message: types.Message):
     answer = await ask_groq(message.text)
